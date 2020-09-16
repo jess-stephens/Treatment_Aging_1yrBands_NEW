@@ -1,0 +1,361 @@
+---
+title: "02_MSD Munging"
+author: "Jessica Stephens"
+date: "8/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+###################### INPORT AND MUNGE MSD #############################
+
+
+## Merge Tx_Curr and TX_new
+## Downloaded from Panorama, MSD OU by IM for 2019
+
+```{r load, echo=FALSE}
+
+msd <- read_msd("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/MER/FY19/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1_MER FY19Q4 Post Clean/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1.txt", save_rds=FALSE)
+
+
+glimpse(msd)
+  
+
+```
+
+
+
+############## MUNGE MSD (DO NOT INCLUDE SEX, USING TOTALS) ################
+
+
+```{r load, echo=FALSE}
+
+
+msd_format <-
+  msd %>%
+  filter(
+    #operatingunit %in% c("Uganda", "Kenya", "Malawi", "Zambia"),
+         indicator %in% c("TX_CURR", "TX_NEW"),
+         fiscal_year %in% c('2018', '2019'),
+         trendsfine!="Retired Age Band",
+         trendsfine!="Coarse",
+         trendsfine!="Unknown Age",
+         standardizeddisaggregate== "Age/Sex/HIVStatus") %>% #double check
+  select(operatingunit, indicator, trendsfine, fiscal_year, cumulative, sex) %>%
+  arrange(operatingunit,indicator, trendsfine, fiscal_year)  %>%
+#  view()
+  group_by(operatingunit,indicator, trendsfine, fiscal_year) %>%
+  summarize(
+    cumulative_total=sum(cumulative,na.rm=TRUE)) %>%
+ #   n=n()) #will show how many rows in grouping --- also can use count() function alone instead of summ with n=n()
+   view()
+view(msd_format)
+
+#  gather(key="cum", value="total", -c(1:4)) %>%
+#  gather(key="cum", value="total", -operatingunit,-indicator, -trendsfine, -fiscal_year) %>%
+
+```
+
+
+
+
+#long to wide so that tx_Curr and TX_new are on same row for country and year and age
+#change var names so mergable with spectrum data
+
+
+```{r load, echo=FALSE}
+
+ msd_format_wide <- msd_format %>%
+  #long to wide so that tx_Curr and TX_new are on same row for country and year and age
+  spread(indicator, cumulative) %>%
+  rename(country=operatingunit, year=fiscal_year, age_group=trendsfine)%>%  
+  pivot_wider(
+     names_from=year,
+     names_glue="{.value}_{year}",
+     values_from=c(TX_CURR, TX_NEW)
+  )  %>%
+  #change var names so mergable with spectrum data
+    mutate_if(~ is.integer(.), as.double)%>%
+  mutate(age_group=recode(age_group, "<1"="<01",
+                          "01-09"="01--09",
+                          "10-14"="10--14")) %>%
+  select(!TX_NEW_2018)%>%
+  glimpse()
+  
+  View(msd_format_wide)
+  glimpse(msd_format_wide)
+
+```
+
+
+
+
+
+
+#######################  merge with spectrum data #######################  
+
+#### START WITH FORMAT 1, NO DISAGGRGATE
+
+<!-- spectrum_clean_all<-read_csv("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/spectrum_clean_all_20200916.csv") -->
+
+```{r load, echo=FALSE}
+  # glimpse(spectrum_clean_all)
+
+#also could have subset from larger dataset
+# spectrum_clean_all2 <- spectrum_clean_all_disagg %>%
+#     subset(sex="MaleFemale) %>%
+#     select(!sex) %>%
+#     view()
+
+df_msd_spectrum <-spectrum_clean_all  %>% 
+  left_join(msd_format_wide, by=c("country"="country", "age_group"="age_group"), `copy` = TRUE)  %>% 
+  select(!year)
+view(df_msd_spectrum)
+
+
+```
+
+
+#calclated variables
+
+
+```{r load, echo=FALSE}
+
+
+df_calulcated_vars <-df_msd_spectrum %>% 
+  mutate(
+         ## Calc predicted remaining in 2019
+        # prev year tx_curr*prediction % difference
+        TX_CURR_2019_aging_adj_baseline=round(TX_CURR_2018*(perc_of_lastyr/100)),
+         ##Calc Expected FY19 CURR accounting for aging in/out
+          #current FY tx_new*predicted remaning in 2019 (last calculation)
+         TX_CURR_2019_aging_adj_final=round(TX_CURR_2019_aging_adj_baseline+TX_NEW_2019),
+         retention_proxy_aging_adj=((TX_CURR_2019/TX_CURR_2019_aging_adj_final)*100),###redone
+         retention_proxy_pepfar=((TX_CURR_2019/(TX_CURR_2018+TX_NEW_2019))*100), #redone
+         retention_highest=(ifelse((100-retention_proxy_aging_adj) < (100-retention_proxy_pepfar),"Aging Adjusted Proxy", "PEPFAR Proxy")))
+
+view(df_calulcated_vars)
+glimpse(df_calulcated_vars)
+  
+write_csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200914.csv", na="")
+
+
+
+#split save is icpi utilities package for data export
+# #export one csv for each OU for TX_NEW
+#   df_ou_im %>%
+#     filter(indicator == "TX_NEW",
+#            standardizeddisaggregate == "Total Numerator") %>%
+#     split_save(operatingunit, "~/Data/FY18Q3", "FY18Q3_TX")
+# 
+# #export one csv for each funding agency with today's date
+#   df_ou_im %>%
+#     filter(indicator %in% c("HTS_TST", "HTS_TST_POS", "TX_NEW"),
+#            standardizeddisaggregate == "Total Numerator") %>%
+#     split_save(fundingagency, "~/CountryFiles", "FY18Q3_Cascade")
+```
+
+
+
+
+
+```{r load, echo=FALSE}
+
+# 
+# df<-read_csv("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", sheet="Spectrum_Retention_20200911")
+
+# Spectrum_Retention_20200911 <- read.csv("~/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", stringsAsFactors=FALSE)
+# View(Spectrum_Retention_20200911)
+# glimpse(Spectrum_Retention_20200911)
+# Spectrum_Retention_20200911 <- Spectrum_Retention_20200911 %>%
+# write_csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", na="")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+############## MUNGE MSD TO INCLUDE SEX ################
+
+
+
+```{r load, echo=FALSE}
+
+
+msd_format <-
+  msd %>%
+  filter(
+    #operatingunit %in% c("Uganda", "Kenya", "Malawi", "Zambia"),
+         indicator %in% c("TX_CURR", "TX_NEW"),
+         fiscal_year %in% c('2018', '2019'),
+         trendsfine!="Retired Age Band",
+         trendsfine!="Coarse",
+         trendsfine!="Unknown Age",
+         standardizeddisaggregate== "Age/Sex/HIVStatus", 
+         sex!="Unknown Sex") %>% 
+  select(operatingunit, indicator, trendsfine, fiscal_year, cumulative, sex) %>%
+  arrange(operatingunit,indicator, trendsfine, fiscal_year, sex)  %>%
+#  view()
+  group_by(operatingunit,indicator, trendsfine, fiscal_year, sex) %>%
+  summarize(
+    cumulative=sum(cumulative,na.rm=TRUE)) %>%  
+
+ #   n=n()) #will show how many rows in grouping --- also can use count() function alone instead of summ with n=n()
+   view()
+view(msd_format)
+
+#  gather(key="cum", value="total", -c(1:4)) %>%
+#  gather(key="cum", value="total", -operatingunit,-indicator, -trendsfine, -fiscal_year) %>%
+
+```
+
+
+
+
+#long to wide so that tx_Curr and TX_new are on same row for country and year and age
+#change var names so mergable with spectrum data
+
+
+```{r load, echo=FALSE}
+
+ msd_format_wide <- msd_format %>%
+  #long to wide so that tx_Curr and TX_new are on same row for country and year and age
+  spread(indicator, cumulative) %>%
+  rename(country=operatingunit, year=fiscal_year, age_group=trendsfine)%>%  
+  pivot_wider(
+     names_from=year,
+     names_glue="{.value}_{year}",
+     values_from=c(TX_CURR, TX_NEW)
+  )  %>%
+  #change var names so mergable with spectrum data
+  mutate_if(~ is.integer(.), as.double)%>%
+  mutate(age_group=recode(age_group, "<1"="<01",
+                          "01-09"="01--09",
+                          "10-14"="10--14")) %>%
+  select(!TX_NEW_2018)%>%
+  glimpse()
+  
+  View(msd_format_wide)
+  glimpse(msd_format_wide)
+
+```
+
+
+
+#######################  merge with spectrum data #######################  
+
+### MERGE WITH SPECTRUM DATA FORMAT 3 - SEX DISAGGREAGATED 
+
+<!-- spectrum_clean_all_disagg<-read_csv("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/spectrum_clean_all_total_20200916.csv") -->
+
+```{r load, echo=FALSE}
+  glimpse(spectrum_clean_all)
+
+spectrum_clean_disag <- spectrum_clean_all_disagg %>%
+    subset(sex!="MaleFemale") %>%
+    view()
+
+
+df_msd_spectrum <-spectrum_clean_disag  %>% 
+  left_join(msd_format_wide, by=c("country"="country", "age_group"="age_group", "sex"="sex"), `copy` = TRUE)  %>% 
+  select(!year)
+view(df_msd_spectrum)
+
+
+```
+
+
+#calclated variables
+
+
+```{r load, echo=FALSE}
+
+df_calulcated_vars <-df_msd_spectrum %>% 
+  mutate(
+         ## Calc predicted remaining in 2019
+        # prev year tx_curr*prediction % difference
+        TX_CURR_2019_aging_adj_baseline=round(TX_CURR_2018*(perc_of_lastyr/100)),
+         ##Calc Expected FY19 CURR accounting for aging in/out
+          #current FY tx_new*predicted remaning in 2019 (last calculation)
+         TX_CURR_2019_aging_adj_final=round(TX_CURR_2019_aging_adj_baseline+TX_NEW_2019),
+         retention_proxy_aging_adj=((TX_CURR_2019/TX_CURR_2019_aging_adj_final)*100),###redone
+         retention_proxy_pepfar=((TX_CURR_2019/(TX_CURR_2018+TX_NEW_2019))*100), #redone
+         retention_highest=(ifelse((100-retention_proxy_aging_adj) < (100-retention_proxy_pepfar),"Aging Adjusted Proxy", "PEPFAR Proxy")))
+
+
+view(df_calulcated_vars)
+glimpse(df_calulcated_vars)
+  
+write_csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_disagg_20200916.csv", na="")
+
+#write.csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", row.names = FALSE)
+
+
+
+### EXAMPLE FOR OTHER EXPORT PACKAGE
+
+#split save is icpi utilities package for data export
+# #export one csv for each OU for TX_NEW
+#   df_ou_im %>%
+#     filter(indicator == "TX_NEW",
+#            standardizeddisaggregate == "Total Numerator") %>%
+#     split_save(operatingunit, "~/Data/FY18Q3", "FY18Q3_TX")
+# 
+# #export one csv for each funding agency with today's date
+#   df_ou_im %>%
+#     filter(indicator %in% c("HTS_TST", "HTS_TST_POS", "TX_NEW"),
+#            standardizeddisaggregate == "Total Numerator") %>%
+#     split_save(fundingagency, "~/CountryFiles", "FY18Q3_Cascade")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- ```{r load, echo=FALSE} -->
+
+<!-- #  -->
+<!-- # df<-read_csv("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", sheet="Spectrum_Retention_20200911") -->
+
+<!-- Spectrum_Retention_20200911 <- read.csv("~/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", stringsAsFactors=FALSE) -->
+<!-- View(Spectrum_Retention_20200911) -->
+<!-- glimpse(Spectrum_Retention_20200911) -->
+<!-- Spectrum_Retention_20200911 <- Spectrum_Retention_20200911 %>% -->
+<!--   # mutate(age_group=ifelse("9-Jan", "1--9", -->
+<!--   #                         ifelse("14-Oct", "10--14",age_group))) -->
+
+<!-- write_csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200911.csv", na="") -->
+
+
+<!-- # malefemale=ifelse(is.na(sex2), 0, 1)) %>% -->
+<!-- ``` -->
+
