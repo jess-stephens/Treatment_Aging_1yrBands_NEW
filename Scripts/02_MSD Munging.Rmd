@@ -19,7 +19,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r load, echo=FALSE}
 
-msd <- read_msd("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/MER/FY19/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1_MER FY19Q4 Post Clean/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1.txt", save_rds=FALSE)
+#msd <- read_msd("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/MER/FY19/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1_MER FY19Q4 Post Clean/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1.txt", save_rds=FALSE)
+
+msd <- read_msd("../Data/MER_Structured_Datasets_OU_IM_FY17-20_20191220_v2_1.txt", save_rds=FALSE)
 
 
 glimpse(msd)
@@ -53,6 +55,7 @@ msd_format <-
     cumulative_total=sum(cumulative,na.rm=TRUE)) %>%
  #   n=n()) #will show how many rows in grouping --- also can use count() function alone instead of summ with n=n()
    view()
+
 view(msd_format)
 
 #  gather(key="cum", value="total", -c(1:4)) %>%
@@ -71,7 +74,7 @@ view(msd_format)
 
  msd_format_wide <- msd_format %>%
   #long to wide so that tx_Curr and TX_new are on same row for country and year and age
-  spread(indicator, cumulative) %>%
+  spread(indicator, cumulative_total) %>%
   rename(country=operatingunit, year=fiscal_year, age_group=trendsfine)%>%  
   pivot_wider(
      names_from=year,
@@ -103,7 +106,10 @@ view(msd_format)
 <!-- spectrum_clean_all<-read_csv("C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/spectrum_clean_all_20200916.csv") -->
 
 ```{r load, echo=FALSE}
-  # glimpse(spectrum_clean_all)
+
+spectrum_clean_all <- read_csv("../Data/Output/spectrum_clean_all_20200916.csv")
+   
+glimpse(spectrum_clean_all)
 
 #also could have subset from larger dataset
 # spectrum_clean_all2 <- spectrum_clean_all_disagg %>%
@@ -111,9 +117,12 @@ view(msd_format)
 #     select(!sex) %>%
 #     view()
 
-df_msd_spectrum <-spectrum_clean_all  %>% 
-  left_join(msd_format_wide, by=c("country"="country", "age_group"="age_group"), `copy` = TRUE)  %>% 
+df_msd_spectrum <- spectrum_clean_all  %>% 
+  left_join(msd_format_wide, 
+            by=c("country"="country", "age_group"="age_group"), 
+            copy = TRUE)  %>% 
   select(!year)
+
 view(df_msd_spectrum)
 
 
@@ -127,18 +136,21 @@ view(df_msd_spectrum)
 
 
 df_calulcated_vars <-df_msd_spectrum %>% 
+  rowwise() %>% 
   mutate(
          ## Calc predicted remaining in 2019
         # prev year tx_curr*prediction % difference
-        TX_CURR_2019_aging_adj_baseline=round(TX_CURR_2018*(perc_of_lastyr/100)),
+        TX_CURR_2019_aging_adj_baseline=round(TX_CURR_2018 * (perc_of_lastyr/100) ),
          ##Calc Expected FY19 CURR accounting for aging in/out
           #current FY tx_new*predicted remaning in 2019 (last calculation)
-         TX_CURR_2019_aging_adj_final=round(TX_CURR_2019_aging_adj_baseline+TX_NEW_2019),
+         TX_CURR_2019_aging_adj_final= sum(TX_CURR_2019_aging_adj_baseline, 
+                                           TX_NEW_2019, na.rm = TRUE),
          retention_proxy_aging_adj=((TX_CURR_2019/TX_CURR_2019_aging_adj_final)*100),###redone
          retention_proxy_pepfar=((TX_CURR_2019/(TX_CURR_2018+TX_NEW_2019))*100), #redone
          retention_highest=(ifelse((100-retention_proxy_aging_adj) < (100-retention_proxy_pepfar),"Aging Adjusted Proxy", "PEPFAR Proxy")))
 
 view(df_calulcated_vars)
+
 glimpse(df_calulcated_vars)
   
 write_csv(df_calulcated_vars,"C:/Users/jesse/OneDrive/Documents/Work Material/USAID/Treatment/Data/Output/Spectrum_Retention_20200914.csv", na="")
